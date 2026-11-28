@@ -2616,8 +2616,8 @@ describe("OrchestratorLedger worker assertion clock rollback", () => {
         forwardJti,
       ).one().count).toBe(1);
       expect(state.storage.sql.exec(
-        "SELECT last_seen_seconds FROM orchestrator_ledger_clock WHERE singleton_id = 1",
-      ).one().last_seen_seconds).toBe(Math.floor(forwardNow / 1000));
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+      ).one().last_seen_ms).toBe(forwardNow);
     });
 
     const rolledBackNow = now + 10_000;
@@ -2647,42 +2647,25 @@ describe("OrchestratorLedger worker assertion clock rollback", () => {
         forwardJti,
       ).one().count).toBe(1);
       expect(state.storage.sql.exec(
-        "SELECT last_seen_seconds FROM orchestrator_ledger_clock WHERE singleton_id = 1",
-      ).one().last_seen_seconds).toBe(Math.floor(forwardNow / 1000));
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+      ).one().last_seen_ms).toBe(forwardNow);
     });
 
-    const toleratedNow = forwardNow - 5_000;
-    const toleratedAssertion = await createWorkerAssertion({
+    const boundaryNow = forwardNow - 5_000;
+    const boundaryAssertion = await createWorkerAssertion({
       subject: "orchestrator-scheduler",
       role: "system",
       operation: "createTask",
-      nowMs: toleratedNow,
-      jti: "jti-clock-rollback-tolerated-0001",
+      nowMs: boundaryNow,
+      jti: "jti-clock-rollback-boundary-0001",
     });
     await expect(ledger.createTask({
-      task: task("task-clock-rollback-tolerated"),
-      idempotencyKey: "clock-rollback-tolerated",
+      task: task("task-clock-rollback-boundary"),
+      idempotencyKey: "clock-rollback-boundary",
       inputHash: "d".repeat(64),
-      now: toleratedNow,
+      now: boundaryNow,
       workerId: "orchestrator-scheduler",
-      workerAssertion: toleratedAssertion,
-    })).resolves.toMatchObject({ created: true });
-
-    const outsideToleranceNow = forwardNow - 6_000;
-    const outsideToleranceAssertion = await createWorkerAssertion({
-      subject: "orchestrator-scheduler",
-      role: "system",
-      operation: "createTask",
-      nowMs: outsideToleranceNow,
-      jti: "jti-clock-rollback-outside-tolerance-0001",
-    });
-    await expect(ledger.createTask({
-      task: task("task-clock-rollback-outside-tolerance"),
-      idempotencyKey: "clock-rollback-outside-tolerance",
-      inputHash: "e".repeat(64),
-      now: outsideToleranceNow,
-      workerId: "orchestrator-scheduler",
-      workerAssertion: outsideToleranceAssertion,
+      workerAssertion: boundaryAssertion,
     })).resolves.toMatchObject({
       created: false,
       reason: "AUTHENTICATED_WORKER_REQUIRED",
@@ -2690,11 +2673,15 @@ describe("OrchestratorLedger worker assertion clock rollback", () => {
 
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec(
-        "SELECT last_seen_seconds FROM orchestrator_ledger_clock WHERE singleton_id = 1",
-      ).one().last_seen_seconds).toBe(Math.floor(forwardNow / 1000));
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+      ).one().last_seen_ms).toBe(forwardNow);
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
-        "task-clock-rollback-outside-tolerance",
+        "task-clock-rollback-boundary",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        "jti-clock-rollback-boundary-0001",
       ).one().count).toBe(0);
     });
   });
@@ -2737,8 +2724,8 @@ describe("OrchestratorLedger webhook retention clock rollback", () => {
           original.idempotencyKey,
         ).one().count).toBe(0);
         expect(state.storage.sql.exec(
-          "SELECT last_seen_seconds FROM orchestrator_ledger_clock WHERE singleton_id = 1",
-        ).one().last_seen_seconds).toBe(Math.floor(forwardNow / 1000));
+          "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+        ).one().last_seen_ms).toBe(forwardNow);
       });
 
       clockNow = now + 1_000;
@@ -2758,8 +2745,8 @@ describe("OrchestratorLedger webhook retention clock rollback", () => {
           original.idempotencyKey,
         ).one().count).toBe(0);
         expect(state.storage.sql.exec(
-          "SELECT last_seen_seconds FROM orchestrator_ledger_clock WHERE singleton_id = 1",
-        ).one().last_seen_seconds).toBe(Math.floor(forwardNow / 1000));
+          "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+        ).one().last_seen_ms).toBe(forwardNow);
       });
     } finally {
       dateNow.mockRestore();
@@ -2812,8 +2799,8 @@ describe("OrchestratorLedger claim cursor clock rollback", () => {
         cursorHash,
       ).one().count).toBe(1);
       expect(state.storage.sql.exec(
-        "SELECT last_seen_seconds FROM orchestrator_ledger_clock WHERE singleton_id = 1",
-      ).one().last_seen_seconds).toBe(Math.floor(forwardNow / 1000));
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+      ).one().last_seen_ms).toBe(forwardNow);
     });
   });
 });

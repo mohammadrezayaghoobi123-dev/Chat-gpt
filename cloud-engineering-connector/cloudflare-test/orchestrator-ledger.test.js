@@ -60,7 +60,7 @@ const evidence = { kind: "test-evidence", reference: "ci://run/123" };
 describe("OrchestratorLedger durable coordination contract", () => {
   it("initializes its own SQLite schema and reports the schema version", async () => {
     const ledger = ledgerFor("ledger-schema-ping");
-    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 7 });
+    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 8 });
     await runInDurableObject(ledger, async (instance, state) => {
       const tables = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row => row.name);
       expect(tables).toEqual(expect.arrayContaining([
@@ -69,6 +69,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
         "orchestrator_consumed_assertions",
         "orchestrator_owner_consumed_assertions",
         "orchestrator_owner_command_receipts",
+        "orchestrator_ledger_clock",
       ]));
       const outboxColumns = state.storage.sql.exec("PRAGMA table_info(orchestrator_outbox_events)").toArray().map(row => row.name);
       expect(outboxColumns).toEqual(expect.arrayContaining([
@@ -2614,6 +2615,9 @@ describe("OrchestratorLedger worker assertion clock rollback", () => {
         "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
         forwardJti,
       ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT last_seen_seconds FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+      ).one().last_seen_seconds).toBe(Math.floor(forwardNow / 1000));
     });
 
     const rolledBackNow = now + 10_000;
@@ -2642,6 +2646,174 @@ describe("OrchestratorLedger worker assertion clock rollback", () => {
         "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
         forwardJti,
       ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT last_seen_seconds FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+      ).one().last_seen_seconds).toBe(Math.floor(forwardNow / 1000));
+    });
+
+    const toleratedNow = forwardNow - 5_000;
+    const toleratedAssertion = await createWorkerAssertion({
+      subject: "orchestrator-scheduler",
+      role: "system",
+      operation: "createTask",
+      nowMs: toleratedNow,
+      jti: "jti-clock-rollback-tolerated-0001",
+    });
+    await expect(ledger.createTask({
+      task: task("task-clock-rollback-tolerated"),
+      idempotencyKey: "clock-rollback-tolerated",
+      inputHash: "d".repeat(64),
+      now: toleratedNow,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: toleratedAssertion,
+    })).resolves.toMatchObject({ created: true });
+
+    const outsideToleranceNow = forwardNow - 6_000;
+    const outsideToleranceAssertion = await createWorkerAssertion({
+      subject: "orchestrator-scheduler",
+      role: "system",
+      operation: "createTask",
+      nowMs: outsideToleranceNow,
+      jti: "jti-clock-rollback-outside-tolerance-0001",
+    });
+    await expect(ledger.createTask({
+      task: task("task-clock-rollback-outside-tolerance"),
+      idempotencyKey: "clock-rollback-outside-tolerance",
+      inputHash: "e".repeat(64),
+      now: outsideToleranceNow,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: outsideToleranceAssertion,
+    })).resolves.toMatchObject({
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT last_seen_seconds FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+      ).one().last_seen_seconds).toBe(Math.floor(forwardNow / 1000));
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+        "task-clock-rollback-outside-tolerance",
+      ).one().count).toBe(0);
+    });
+  });
+});
+
+describe("OrchestratorLedger webhook retention clock rollback", () => {
+  it("rejects delivery replay after retention cleanup and a backward clock step", async () => {
+    const ledger = ledgerFor("ledger-webhook-retention-clock-rollback");
+    let clockNow = now;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+    try {
+      const original = {
+        deliveryId: "delivery-clock-rollback-0001",
+        bodySha256: "a".repeat(64),
+        eventName: "issues",
+        receivedAt: now,
+        idempotencyKey: "webhook-clock-rollback-original",
+        inputHash: "b".repeat(64),
+      };
+      expect(ledger.claimGitHubDelivery(original)).toMatchObject({ claimed: true, replay: false });
+
+      const forwardNow = now + 31 * 24 * 60 * 60 * 1000;
+      clockNow = forwardNow;
+      expect(ledger.claimGitHubDelivery({
+        deliveryId: "delivery-clock-rollback-0002",
+        bodySha256: "c".repeat(64),
+        eventName: "issues",
+        receivedAt: forwardNow,
+        idempotencyKey: "webhook-clock-rollback-forward",
+        inputHash: "d".repeat(64),
+      })).toMatchObject({ claimed: true, replay: false });
+
+      await runInDurableObject(ledger, async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries WHERE delivery_id = ?",
+          original.deliveryId,
+        ).one().count).toBe(0);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_github_business_idempotency WHERE idempotency_key = ?",
+          original.idempotencyKey,
+        ).one().count).toBe(0);
+        expect(state.storage.sql.exec(
+          "SELECT last_seen_seconds FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+        ).one().last_seen_seconds).toBe(Math.floor(forwardNow / 1000));
+      });
+
+      clockNow = now + 1_000;
+      expect(ledger.claimGitHubDelivery(original)).toMatchObject({
+        claimed: false,
+        replay: false,
+        reason: "LEDGER_CLOCK_ROLLBACK",
+      });
+
+      await runInDurableObject(ledger, async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries WHERE delivery_id = ?",
+          original.deliveryId,
+        ).one().count).toBe(0);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_github_business_idempotency WHERE idempotency_key = ?",
+          original.idempotencyKey,
+        ).one().count).toBe(0);
+        expect(state.storage.sql.exec(
+          "SELECT last_seen_seconds FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+        ).one().last_seen_seconds).toBe(Math.floor(forwardNow / 1000));
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+});
+
+describe("OrchestratorLedger claim cursor clock rollback", () => {
+  it("does not prune expired cursors before rejecting a backward Ledger clock", async () => {
+    const ledger = ledgerFor("ledger-claim-cursor-clock-rollback");
+    await createTask(ledger, {
+      task: task("task-clock-cursor-original"),
+      idempotencyKey: "clock-cursor-original",
+      inputHash: "f".repeat(64),
+      now,
+    });
+
+    const forwardNow = now + 661_000;
+    await createTask(ledger, {
+      task: task("task-clock-cursor-forward"),
+      idempotencyKey: "clock-cursor-forward",
+      inputHash: "1".repeat(64),
+      now: forwardNow,
+    });
+
+    const cursorHash = "a".repeat(64);
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO orchestrator_claim_cursors (cursor_hash, executor_id, snapshot_sequence, created_at, task_id, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+        cursorHash, "agent:worker-1", 0, now, "task-clock-cursor-original",
+        Math.floor((now + 20_000) / 1000),
+      );
+    });
+
+    const rolledBackNow = now + 30_000;
+    const workerAssertion = await claimAssertion("agent:worker-1", rolledBackNow);
+    await expect(ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion,
+      leaseMs: 30_000,
+      now: rolledBackNow,
+    })).resolves.toMatchObject({
+      claimed: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_claim_cursors WHERE cursor_hash = ?",
+        cursorHash,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT last_seen_seconds FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+      ).one().last_seen_seconds).toBe(Math.floor(forwardNow / 1000));
     });
   });
 });

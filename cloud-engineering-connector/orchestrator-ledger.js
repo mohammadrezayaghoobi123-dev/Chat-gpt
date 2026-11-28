@@ -175,7 +175,7 @@ function consumeWorkerAssertion(sql, assertion, nowMs) {
     assertion.jti, assertion.subject, assertion.role, assertion.operation,
     assertion.kid, assertion.issuedAt, assertion.expiresAt, nowSeconds,
   );
-  return effectiveNowMs;
+  return nowMs;
 }
 
 function taskFromRow(row) {
@@ -1977,7 +1977,7 @@ export class OrchestratorLedger extends DurableObject {
       const previous = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
       const previousHash = previous?.event_hash ?? null;
       const eventHash = await sha256Canonical({
-        eventId, taskId, actorId, actorRole, eventType, details: JSON.parse(detailsJson), occurredAt: now, previousHash,
+        eventId, taskId, actorId, actorRole, eventType, details: JSON.parse(detailsJson), occurredAt: now - 1_000, previousHash,
       });
       const inserted = this.ctx.storage.transactionSync(() => {
         const transactionNow = advanceLedgerClock(sql, now, clockDomain);

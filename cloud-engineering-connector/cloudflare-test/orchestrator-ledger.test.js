@@ -2885,3 +2885,89 @@ describe("OrchestratorLedger lease clock rollback", () => {
     });
   });
 });
+
+
+describe("OrchestratorLedger cross-principal JTI retention", () => {
+  it("does not let a different Worker principal prune a consumed JTI before its issuer clock advances", async () => {
+    const ledger = ledgerFor("ledger-cross-principal-jti-retention");
+    const schedulerJti = "jti-scheduler-cross-principal-retention-0001";
+    const schedulerAssertion = await createWorkerAssertion({
+      subject: "orchestrator-scheduler",
+      role: "system",
+      operation: "createTask",
+      nowMs: now,
+      jti: schedulerJti,
+    });
+    await expect(ledger.createTask({
+      task: task("task-cross-principal-jti-retention"),
+      idempotencyKey: "cross-principal-jti-retention-create",
+      inputHash: "4".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: schedulerAssertion,
+    })).resolves.toMatchObject({ created: true });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_worker_id, lease_generation, lease_until, created_at, updated_at, retry_state, next_attempt_at) VALUES (?, ?, ?, ?, ?, 'PENDING', 0, NULL, 0, 0, ?, ?, 'READY', 0)",
+        "evt-cross-principal-jti-retention",
+        "key-cross-principal-jti-retention",
+        "task-cross-principal-jti-retention",
+        "task.transitioned",
+        JSON.stringify({ taskId: "task-cross-principal-jti-retention", version: 1 }),
+        now,
+        now,
+      );
+    });
+
+    const forwardNow = now + 661_000;
+    const publisherAssertion = await createWorkerAssertion({
+      subject: "orchestrator-outbox-publisher",
+      role: "publisher",
+      operation: "claimOutbox",
+      nowMs: forwardNow,
+    });
+    await expect(ledger.claimOutbox({
+      workerId: "orchestrator-outbox-publisher",
+      workerAssertion: publisherAssertion,
+      leaseMs: 30_000,
+      now: forwardNow,
+    })).resolves.toMatchObject({ claimed: true, event: { eventId: "evt-cross-principal-jti-retention" } });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ? AND subject = ?",
+        schedulerJti,
+        "orchestrator-scheduler",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ?",
+        "orchestrator-outbox-publisher",
+      ).one().count).toBe(1);
+    });
+
+    await expect(ledger.createTask({
+      task: task("task-cross-principal-jti-replay"),
+      idempotencyKey: "cross-principal-jti-retention-replay",
+      inputHash: "5".repeat(64),
+      now: now + 10_000,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: schedulerAssertion,
+    })).resolves.toMatchObject({
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+        "task-cross-principal-jti-replay",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ? AND subject = ?",
+        schedulerJti,
+        "orchestrator-scheduler",
+      ).one().count).toBe(1);
+    });
+  });
+});

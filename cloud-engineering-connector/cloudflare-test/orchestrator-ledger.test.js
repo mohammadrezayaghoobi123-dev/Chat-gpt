@@ -2489,3 +2489,78 @@ it("recovers a Queue-accepted send with a lost acknowledgement through bounded r
     dateNow.mockRestore();
   }
 }, 15000);
+
+
+describe("OrchestratorLedger signed worker clock-skew boundaries", () => {
+  it("enforces the exact lower and upper clock-skew boundaries for signed worker assertions", async () => {
+    const cases = [
+      {
+        taskId: "task-clock-future-outside",
+        idempotencyKey: "clock-future-outside",
+        jti: "jti-clock-future-outside-000001",
+        deltaMs: -6_000,
+        expected: { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" },
+        taskRows: 0,
+        jtiRows: 0,
+      },
+      {
+        taskId: "task-clock-future-boundary",
+        idempotencyKey: "clock-future-boundary",
+        jti: "jti-clock-future-boundary-000001",
+        deltaMs: -5_000,
+        expected: { created: true },
+        taskRows: 1,
+        jtiRows: 1,
+      },
+      {
+        taskId: "task-clock-expiry-boundary",
+        idempotencyKey: "clock-expiry-boundary",
+        jti: "jti-clock-expiry-boundary-000001",
+        deltaMs: 65_000,
+        expected: { created: true },
+        taskRows: 1,
+        jtiRows: 1,
+      },
+      {
+        taskId: "task-clock-expiry-outside",
+        idempotencyKey: "clock-expiry-outside",
+        jti: "jti-clock-expiry-outside-000001",
+        deltaMs: 66_000,
+        expected: { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" },
+        taskRows: 0,
+        jtiRows: 0,
+      },
+    ];
+
+    for (const scenario of cases) {
+      const ledger = ledgerFor("ledger-" + scenario.taskId);
+      const workerAssertion = await createWorkerAssertion({
+        subject: "orchestrator-scheduler",
+        role: "system",
+        operation: "createTask",
+        nowMs: now,
+        jti: scenario.jti,
+      });
+
+      await expect(ledger.createTask({
+        task: task(scenario.taskId),
+        idempotencyKey: scenario.idempotencyKey,
+        inputHash: "f".repeat(64),
+        now: now + scenario.deltaMs,
+        workerId: "orchestrator-scheduler",
+        workerAssertion,
+      })).resolves.toMatchObject(scenario.expected);
+
+      await runInDurableObject(ledger, async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+          scenario.taskId,
+        ).one().count).toBe(scenario.taskRows);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+          scenario.jti,
+        ).one().count).toBe(scenario.jtiRows);
+      });
+    }
+  });
+});
